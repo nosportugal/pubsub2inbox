@@ -34,7 +34,11 @@ resource "google_secret_manager_secret" "config-secret" {
   secret_id = var.secret_id != "" ? var.secret_id : var.function_name
 
   replication {
-    automatic = true
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
   }
 
   depends_on = [
@@ -205,7 +209,7 @@ resource "google_storage_bucket_object" "function-archive" {
 
   name   = format("index-%s.zip", md5(join(",", local.function_file_hashes)))
   bucket = google_storage_bucket.function-bucket[0].name
-  source = format("%s/index.zip", path.root)
+  source = format("%s/index.zip", path.module)
   depends_on = [
     data.archive_file.function-zip.0
   ]
@@ -230,6 +234,8 @@ resource "google_cloudfunctions_function" "function" {
   source_archive_object = google_storage_bucket_object.function-archive[0].name
   entry_point           = "process_pubsub"
   timeout               = var.function_timeout
+
+  vpc_connector = var.vpc_connector
 
   event_trigger {
     event_type = "google.pubsub.topic.publish"
