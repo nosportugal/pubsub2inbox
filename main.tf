@@ -162,9 +162,11 @@ resource "google_service_account_iam_member" "service-account-actas-self" {
 
 # Allow Atlantis impersonate SA used to run CF
 resource "google_service_account_iam_member" "atlantis" {
+  count = var.automation_principal != "" ? 1 : 0
+
   service_account_id = google_service_account.service-account.name
   role               = "roles/iam.serviceAccountUser"
-  member             = "group:cloud.automation@nos.pt"
+  member             = var.automation_principal
 }
 
 # Allow the service account to access the configuration from the secret

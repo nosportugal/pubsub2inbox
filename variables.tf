@@ -73,6 +73,13 @@ variable "service_account" {
   default = ""
 }
 
+variable "automation_principal" {
+  type        = string
+  description = "Principal that will impersonate SA in order to setup"
+
+  default = ""
+}
+
 variable "bucket_name" {
   type        = string
   description = "Bucket for storing the Cloud Function"
