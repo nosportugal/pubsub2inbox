@@ -249,9 +249,6 @@ resource "google_cloudfunctions_function" "function" {
   event_trigger {
     event_type = "google.pubsub.topic.publish"
     resource   = var.pubsub_topic
-    failure_policy {
-      retry = false
-    }
   }
 
   environment_variables = {
