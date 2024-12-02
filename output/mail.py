@@ -245,7 +245,9 @@ class MailOutput(Output):
         parsed_recipients = email.utils.getaddresses([mail['mail_to']])
         recipients = []
         for r in parsed_recipients:
-            recipients.append(r[1])
+            # if the recipient is a empty string, skip it
+            if r[1] != "":
+                recipients.append(r[1])
 
         self.logger.debug('Sending email thru SMTP.',
                           extra={'recipients': recipients})
