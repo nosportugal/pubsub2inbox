@@ -229,7 +229,7 @@ resource "google_cloudfunctions_function" "function" {
 
   name        = var.function_name
   description = "Pubsub2Inbox"
-  runtime     = "python39"
+  runtime     = "python310"
 
   service_account_email = google_service_account.service-account.email
 
