@@ -105,7 +105,8 @@ class DownloadProcessor(Processor):
         else:
             ssh_client = paramiko.SSHClient()
             if 'hostKey' not in self.config:
-                ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                # Rely on Paramiko's default RejectPolicy to refuse unknown host keys.
+                pass
             else:
                 host_key = self._jinja_expand_dict(self.config['hostKey'],
                                                    'host_key')
