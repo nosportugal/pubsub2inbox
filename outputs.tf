@@ -1,4 +1,4 @@
-#   Copyright 2021 Google LLC
+#   Copyright 2022 Google LLC
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -13,5 +13,64 @@
 #   limitations under the License.
 
 output "service_account" {
-  value = google_service_account.service-account.email
+  value = var.create_service_account ? google_service_account.service-account[0].email : var.service_account
+}
+
+output "service_account_name" {
+  value = var.create_service_account ? google_service_account.service-account[0].name : null
+}
+
+output "name" {
+  value = var.function_name
+}
+
+output "region" {
+  value = var.region
+}
+
+output "project_id" {
+  value = var.project_id
+}
+
+output "secret" {
+  value     = google_secret_manager_secret.config-secret
+  sensitive = true
+}
+
+output "bucket" {
+  value = !var.cloud_run ? google_storage_bucket.function-bucket : null
+}
+
+output "json2pubsub_url" {
+  value = var.deploy_json2pubsub.enabled ? (
+    var.cloud_functions_v2 ?
+    google_cloudfunctions2_function.json2pubsub-function[0].service_config[0].uri :
+    google_cloud_run_service.json2pubsub-function[0].status[0].url
+  ) : null
+}
+
+output "run_service" {
+  value = (var.cloud_run || var.cloud_functions_v2 ?
+    (var.cloud_run ? {
+      project  = var.project_id
+      location = google_cloud_run_service.function[0].location
+      service  = google_cloud_run_service.function[0].name
+      name     = google_cloud_run_service.function[0].name
+      url      = google_cloud_run_service.function[0].status[0].url
+      } : {
+      project  = var.project_id
+      location = google_cloudfunctions2_function.function[0].location
+      service  = google_cloudfunctions2_function.function[0].service_config[0].service
+      name     = google_cloudfunctions2_function.function[0].name
+      url      = google_cloudfunctions2_function.function[0].url
+    })
+  : null)
+}
+
+output "cloud_run" {
+  value = var.cloud_run
+}
+
+output "cloud_functions_v2" {
+  value = var.cloud_functions_v2
 }

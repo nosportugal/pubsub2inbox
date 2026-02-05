@@ -32,11 +32,13 @@ def strftime(timestamp_string, strftime_format):
         if isinstance(timestamp_string, int):  # Unix time
             dt = datetime.utcfromtimestamp(timestamp_string)
         else:
-            parsed = parsedatetime.Calendar().parse(timestamp_string)
+            parsed = parsedatetime.Calendar(
+                version=parsedatetime.VERSION_CONTEXT_STYLE).parse(
+                    timestamp_string)
             if len(parsed) > 1:
-                dt = datetime.fromtimestamp(mktime(parsed[0]))
+                dt = datetime(*parsed[0][:6])
             else:
-                dt = datetime.fromtimestamp(mktime(parsed))
+                dt = datetime(*parsed[:6])
 
     return dt.strftime(strftime_format)
 
@@ -47,7 +49,9 @@ def utc_strftime(timestamp_string, strftime_format):
         if isinstance(timestamp_string, int):  # Unix time
             dt = datetime.utcfromtimestamp(timestamp_string)
         else:
-            parsed = parsedatetime.Calendar().parse(timestamp_string)
+            parsed = parsedatetime.Calendar(
+                version=parsedatetime.VERSION_CONTEXT_STYLE).parse(
+                    timestamp_string)
             if len(parsed) > 1:
                 dt = datetime.fromtimestamp(mktime(parsed[0]))
             else:
@@ -57,8 +61,9 @@ def utc_strftime(timestamp_string, strftime_format):
 
 
 def recurring_date(event, now_date=None, strftime_format='%Y-%m-%d'):
-    if now_date != None:
-        time_struct, parse_status = parsedatetime.Calendar().parse(now_date)
+    if now_date is not None:
+        time_struct, parse_status = parsedatetime.Calendar(
+            version=parsedatetime.VERSION_CONTEXT_STYLE).parse(now_date)
         if not parse_status:
             raise InvalidDatetimeException('Failed to parse "%s"' % (now_date))
         now_date = datetime(*time_struct[:6])

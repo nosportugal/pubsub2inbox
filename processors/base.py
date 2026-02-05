@@ -11,10 +11,10 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
-from google.cloud.functions.context import Context
 from googleapiclient import discovery, http
 import abc
-from helpers.base import BaseHelper
+from helpers.base import BaseHelper, Context
+import copy
 
 _PROJECT_NUM_CACHE = {}
 _PROJECT_ID_CACHE = {}
@@ -28,15 +28,19 @@ class UnknownProjectException(Exception):
     pass
 
 
+class NoConfigKeySetException(Exception):
+    pass
+
+
+class ProcessorException(Exception):
+    pass
+
+
 class Processor(BaseHelper):
-    config = None
-    data = None
-    event = None
-    context: Context
 
     def __init__(self, config, jinja_environment, data, event,
                  context: Context):
-        self.config = config
+        self.config = copy.deepcopy(config)
         self.data = data
         self.event = event
         self.context = context
@@ -101,5 +105,10 @@ class Processor(BaseHelper):
         return ret
 
     @abc.abstractmethod
-    def process(self, config_key=None):
+    def process(self, output_var=None):
         pass
+
+    @staticmethod
+    @abc.abstractmethod
+    def get_default_config_key():
+        raise NoConfigKeySetException

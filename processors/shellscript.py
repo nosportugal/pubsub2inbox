@@ -25,16 +25,33 @@ class CommandFailedException(Exception):
 
 
 class ShellscriptProcessor(Processor):
+    """
+    Runs any shellscript as a command and exposes the output in Jinja.
 
-    def process(self, config_key=None):
-        if config_key is None:
-            config_key = 'shellscript'
+    Args:
+        command (str): Command to execute.
+        args (list, optional): List of arguments.
+        environment (dict, optional): Additional environment variables to set.
+        stdin (str, optional): Contents to pass via stdin to the process.
+        json (bool, optional): Interpret the output as JSON.
+        jsonMultiline (bool, optional): Interpret the output as multiline JSON.
+        yaml (bool, optional): Interpret the output as YAML.
+        csv (bool, optional): Interpret the output as CSV.
+        tsv (bool, optional): Interpret the output as TSV.
+        exitcodes (list, optional): List of allowed exit codes that are interpreted as successful run.
+    """
 
-        shell_config = self.config[config_key]
+    def get_default_config_key():
+        return 'shellscript'
+
+    def process(self, output_var='shellscript'):
+        shell_config = self.config
         if 'command' not in shell_config:
             raise NotConfiguredException('No executable command found!')
-        if 'output' not in shell_config:
-            raise NotConfiguredException('No output variable found!')
+
+        if 'output' in shell_config:
+            output_var = self._jinja_expand_string(shell_config['output'],
+                                                   'output')
 
         command = self._jinja_expand_string(shell_config['command'], 'command')
 
@@ -105,9 +122,7 @@ class ShellscriptProcessor(Processor):
                 data.append(row)
 
         ret = {}
-        output_variable = self._jinja_expand_string(shell_config['output'],
-                                                    'output')
-        ret[output_variable] = {
+        ret[output_var] = {
             'parsed': data,
             'stdout': result.stdout,
             'stderr': result.stderr,

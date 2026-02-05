@@ -17,13 +17,11 @@ from googleapiclient import discovery
 
 class MonitoringProcessor(Processor):
 
-    def process(self, config_key=None):
-        if config_key is None:
-            config_key = 'monitoring'
-        if config_key not in self.config:
-            raise NotConfiguredException('No settings configured!')
+    def get_default_config_key():
+        return 'monitoring'
 
-        monitoring_config = self.config[config_key]
+    def process(self, output_var='time_series'):
+        monitoring_config = self.config
         if 'timeSeries' not in monitoring_config:
             raise NotConfiguredException('No time series configured!')
 
@@ -60,13 +58,13 @@ class MonitoringProcessor(Processor):
                     'pageSize': page_size,
                 }
                 while True:
-                    if not page_token is None:
+                    if page_token is not None:
                         request_body['pageToken'] = page_token
                     request = monitoring_service.projects().timeSeries().query(
                         name=project_str, body=request_body)
                     response = request.execute()
                     if 'timeSeriesDescriptor' in response:
-                        if not key_str in results:
+                        if key_str not in results:
                             results[key_str] = {
                                 'timeSeriesDescriptor':
                                     response['timeSeriesDescriptor']
@@ -123,4 +121,4 @@ class MonitoringProcessor(Processor):
                 results[k]['int64s'].append(val_int64s)
                 results[k]['strings'].append(val_strings)
 
-        return {'time_series': results}
+        return {output_var: results}

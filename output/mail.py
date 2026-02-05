@@ -16,7 +16,8 @@ import os
 import email
 import base64
 from email import encoders
-import smtplib, ssl
+import smtplib
+import ssl
 import urllib
 from googleapiclient import discovery, errors
 from email.mime.base import MIMEBase
@@ -24,7 +25,7 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 import sendgrid
-from sendgrid.helpers.mail import Attachment
+from sendgrid.helpers.mail import Attachment, SandBoxMode
 from google.oauth2.credentials import Credentials
 from google.cloud import storage
 from python_http_client import exceptions
@@ -79,16 +80,25 @@ class MailOutput(Output):
         return os.path.basename(blob.name), blob_string
 
     def _fetch_ms_access_token(self, client_id, client_secret, tenant_id):
-        authority = 'https://login.microsoftonline.com/%s' % urllib.parse.quote_plus(tenant_id)
-        app = ConfidentialClientApplication(client_id, client_credential=client_secret, authority=authority)
-        result = app.acquire_token_for_client(['https://graph.microsoft.com/.default'])
-        if not 'access_token' in result:
+        authority = 'https://login.microsoftonline.com/%s' % urllib.parse.quote_plus(
+            tenant_id)
+        app = ConfidentialClientApplication(client_id,
+                                            client_credential=client_secret,
+                                            authority=authority)
+        result = app.acquire_token_for_client(
+            ['https://graph.microsoft.com/.default'])
+        if 'access_token' not in result:
             raise OAuthTokenFetchException(result.get('error_description'))
         return result['access_token']
 
     def expand_recipients(self, mail, config):
         """Expands group recipients using the Directory API"""
-        to_emails = email.utils.getaddresses([mail['mail_to']])
+        to_emails = []
+        try:
+            to_emails = email.utils.getaddresses([mail['mail_to']],
+                                                 strict=False)
+        except TypeError:
+            to_emails = email.utils.getaddresses([mail['mail_to']])
         self.logger.debug('Starting expansion of group recipients...',
                           extra={'to': to_emails})
 
@@ -141,7 +151,7 @@ class MailOutput(Output):
                     if u_response:
                         new_emails.append(e[1])
                 except errors.HttpError as exc:
-                    if not 'ignoreNonexistentGroups' in config or not config[
+                    if 'ignoreNonexistentGroups' not in config or not config[
                             'ignoreNonexistentGroups']:
                         raise GroupNotFoundException(
                             'Failed to find group %s in Cloud Identity!' % e[1])
@@ -178,7 +188,7 @@ class MailOutput(Output):
 
         server = None
         if 'verifyCertificate' in transport and transport[
-                'verifyCertificate'] == False:
+                'verifyCertificate'] is False:
             context = ssl._create_unverified_context()
         else:
             context = ssl.create_default_context()
@@ -238,7 +248,12 @@ class MailOutput(Output):
                     (file_name, len(content)))
                 message.attach(image)
 
-        parsed_recipients = email.utils.getaddresses([mail['mail_to']])
+        parsed_recipients = []
+        try:
+            parsed_recipients = email.utils.getaddresses([mail['mail_to']],
+                                                         strict=False)
+        except TypeError:
+            parsed_recipients = email.utils.getaddresses([mail['mail_to']])
         recipients = []
         for r in parsed_recipients:
             recipients.append(r[1])
@@ -267,6 +282,12 @@ class MailOutput(Output):
             text_content = sendgrid.Content('text/plain', mail['text_body'])
         sendgrid_mail = sendgrid.Mail(from_email, to_email,
                                       mail['mail_subject'], text_content)
+        if 'sandbox' in transport and transport['sandbox']:
+            self.logger.info(
+                'Using Sendgrid sandbox mode (no emails will be sent).')
+            sendgrid_mail_settings = sendgrid.MailSettings(
+                sandbox_mode=SandBoxMode(True))
+            sendgrid_mail.mail_settings = sendgrid_mail_settings
         if mail['html_body'] != '':
             html_content = sendgrid.Content('text/html', mail['html_body'])
             sendgrid_mail.add_content(html_content)
@@ -328,22 +349,21 @@ class MailOutput(Output):
             raise NotConfiguredException(
                 'No tenant_id for MS Graph API configured!')
 
-        token = self._fetch_ms_access_token(transport['client_id'], transport['client_secret'], transport['tenant_id'])
-        url = 'https://graph.microsoft.com/v1.0/users/%s/sendMail' % urllib.parse.quote_plus(mail['mail_from'])
+        token = self._fetch_ms_access_token(transport['client_id'],
+                                            transport['client_secret'],
+                                            transport['tenant_id'])
+        url = 'https://graph.microsoft.com/v1.0/users/%s/sendMail' % urllib.parse.quote_plus(
+            mail['mail_from'])
         recipients = []
         for addr in mail['mail_to'].split(','):
-            recipient = {
-                "emailAddress": {
-                    "address": addr.strip()
-                }
-            }
+            recipient = {"emailAddress": {"address": addr.strip()}}
             recipients.append(recipient)
 
         content = mail['text_body']
         contentType = 'text'
         if 'html_body' in mail and mail['html_body'] != '':
-          content = mail['html_body']
-          contentType = 'html'
+            content = mail['html_body']
+            contentType = 'html'
 
         message = {
             'message': {
@@ -361,16 +381,16 @@ class MailOutput(Output):
             'Authorization': 'Bearer %s' % token
         }
         messageJSON = json.dumps(message, default=lambda o: o.__dict__)
-        messageJSON = messageJSON.replace('\\\\n','\\n')
+        messageJSON = messageJSON.replace('\\\\n', '\\n')
         self.logger.debug('Sending email through MS Graph API.')
-        response = requests.post(url,
-            headers=headers,
-            data=messageJSON
-        )
+        response = requests.post(url, headers=headers, data=messageJSON)
         if response.status_code >= 200 and response.status_code <= 299:
             return True
         self.logger.error('Failed to send via MS Graph API.',
-                              extra={'status_code': response.status_code, 'response': response.text})
+                          extra={
+                              'status_code': response.status_code,
+                              'response': response.text
+                          })
         return False
 
     def embed_images(self, config):
@@ -433,17 +453,23 @@ class MailOutput(Output):
 
         if mail['html_body'] == '' and mail['text_body'] == '':
             raise NotConfiguredException(
-                'No HMTL or text email body configured for email output!')
+                'No HTML or text email body configured for email output!')
 
         for tpl in ['from', 'to', 'subject']:
-            mail_template = self.jinja_environment.from_string(
-                self.output_config[tpl])
-            mail['mail_%s' % tpl] = mail_template.render()
+            result = self._jinja_expand_string(self.output_config[tpl], tpl)
+            mail['mail_%s' % tpl] = result
 
         self.logger.debug('Canonicalizing email formats...')
         # Canonicalize the email formats
         for tpl in ['from', 'to']:
-            parsed_emails = email.utils.getaddresses([mail['mail_%s' % tpl]])
+            parsed_emails = []
+            try:
+                parsed_emails = email.utils.getaddresses(
+                    [mail['mail_%s' % tpl]], strict=False)
+            except TypeError:
+                parsed_emails = email.utils.getaddresses(
+                    [mail['mail_%s' % tpl]])
+
             if tpl == 'from' and len(parsed_emails) > 1:
                 raise MultipleSendersException(
                     'Multiple senders in from field!')
