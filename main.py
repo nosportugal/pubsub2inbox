@@ -27,15 +27,19 @@ from dateutil import parser
 from filters import get_jinja_filters, get_jinja_tests
 from jinja2 import Environment, TemplateError
 from google.cloud import secretmanager, storage
-from google.cloud.functions.context import Context
 from pythonjsonlogger import jsonlogger
 import traceback
-from helpers.base import get_grpc_client_info
+from helpers.base import get_grpc_client_info, Context, BaseHelper
+import random
+import uuid
+from functools import partial
+from flask import Response
 
 config_file_name = 'config.yaml'
 execution_count = 0
 configuration = None
 logger = None
+extra_vars = []
 
 
 def load_configuration(file_name):
@@ -70,11 +74,31 @@ def get_jinja_escaping(template_name):
 
 def get_jinja_environment():
     env = Environment(autoescape=get_jinja_escaping,
+                      cache_size=0,
                       extensions=['jinja2.ext.do'])
     env.globals = {**env.globals, **{'env': os.environ}}
+    env.globals['req_random_int'] = random.randrange(0, 9223372036854775807)
+    request_uuid = uuid.uuid4()
+    env.globals['req_random_uuid_hex'] = request_uuid.hex
+    env.globals['req_random_uuid_int'] = request_uuid.int
+    nice_uuid = base64.urlsafe_b64encode(request_uuid.bytes)
+    env.globals['req_random_uuid'] = nice_uuid.decode('utf-8').rstrip(
+        '=').lower(
+        )  # This is not as unique as raw UUID, but still pretty unique
+
+    if extra_vars and len(extra_vars) > 0:
+        for v in extra_vars:
+            if v[1].startswith('[') or v[1].startswith('{'):
+                env.globals[v[0]] = json.loads(v[1])
+            else:
+                env.globals[v[0]] = v[1]
     env.filters.update(get_jinja_filters())
     env.tests.update(get_jinja_tests())
     return env
+
+
+class ConcurrencyRetryException(Exception):
+    pass
 
 
 class MessageTooOldException(Exception):
@@ -117,6 +141,14 @@ class InvalidMessageFormatException(Exception):
     pass
 
 
+class MalformedGlobalsException(Exception):
+    pass
+
+
+class MalformedMacrosException(Exception):
+    pass
+
+
 def check_retry_period(config, context, logger):
     # Ignore messages submitted before our retry period
     retry_period = '2 days ago'
@@ -153,7 +185,6 @@ def process_message_legacy(logger, config, data, event, context):
         'event': event,
         'context': context,
     }
-
     jinja_environment = get_jinja_environment()
     if 'processors' in config:
         for processor in config['processors']:
@@ -425,22 +456,218 @@ def handle_ignore_on(logger, ignore_config, jinja_environment,
     return True
 
 
-def process_message_pipeline(logger, config, data, event, context):
+def get_concurrency_params(concurrency_config, jinja_environment,
+                           template_variables):
+    if 'bucket' not in concurrency_config:
+        raise NoResendConfigException(
+            'No Cloud Storage bucket configured, even though concurrency is set!'
+        )
+
+    bucket_template = jinja_environment.from_string(
+        concurrency_config['bucket'])
+    bucket_template.name = 'concurrency'
+    concurrency_bucket = bucket_template.render()
+    if 'file' in concurrency_config:
+        file_template = jinja_environment.from_string(
+            concurrency_config['file'])
+        file_template.name = 'concurrency'
+        concurrency_file = file_template.render()
+    else:
+        concurrency_file = 'pubsub2inbox.lock'
+    return concurrency_bucket, concurrency_file
+
+
+def handle_concurrency_post(logger, concurrency_config, jinja_environment,
+                            template_variables):
+    concurrency_bucket, concurrency_file = get_concurrency_params(
+        concurrency_config, jinja_environment, template_variables)
+    logger.debug('Removing concurrency lock object from bucket...',
+                 extra={
+                     'bucket': concurrency_bucket,
+                     'blob': concurrency_file
+                 })
+
+    if os.getenv('STORAGE_EMULATOR_HOST'):
+        from google.auth.credentials import AnonymousCredentials
+
+        anon_credentials = AnonymousCredentials()
+        storage_client = storage.Client(
+            client_info=get_grpc_client_info(),
+            client_options={"api_endpoint": os.getenv('STORAGE_EMULATOR_HOST')},
+            credentials=anon_credentials)
+    else:
+        storage_client = storage.Client(client_info=get_grpc_client_info())
+
+    bucket = storage_client.bucket(concurrency_bucket)
+    concurrency_blob = bucket.blob(concurrency_file)
+    concurrency_blob.delete()
+
+
+def handle_concurrency_pre(logger, concurrency_config, jinja_environment,
+                           template_variables):
+    concurrency_bucket, concurrency_file = get_concurrency_params(
+        concurrency_config, jinja_environment, template_variables)
+    logger.debug('Checking if concurrency lock file exists in bucket...',
+                 extra={
+                     'bucket': concurrency_bucket,
+                     'blob': concurrency_file
+                 })
+
+    if os.getenv('STORAGE_EMULATOR_HOST'):
+        from google.auth.credentials import AnonymousCredentials
+
+        anon_credentials = AnonymousCredentials()
+        storage_client = storage.Client(
+            client_info=get_grpc_client_info(),
+            client_options={"api_endpoint": os.getenv('STORAGE_EMULATOR_HOST')},
+            credentials=anon_credentials)
+    else:
+        storage_client = storage.Client(client_info=get_grpc_client_info())
+
+    bucket = storage_client.bucket(concurrency_bucket)
+    concurrency_blob = bucket.blob(concurrency_file)
+    if concurrency_blob.exists():
+        if 'period' in concurrency_config:
+            concurrency_blob.reload()
+            concurrency_period = concurrency_config['period']
+            concurrency_period_parsed = parsedatetime.Calendar(
+                version=parsedatetime.VERSION_CONTEXT_STYLE).parse(
+                    concurrency_period,
+                    sourceTime=concurrency_blob.time_created)
+            if len(concurrency_period_parsed) > 1:
+                concurrency_earliest = datetime.fromtimestamp(
+                    mktime(concurrency_period_parsed[0]))
+            else:
+                concurrency_earliest = datetime.fromtimestamp(
+                    mktime(concurrency_period_parsed))
+
+            if datetime.utcnow() >= concurrency_earliest:
+                logger.info(
+                    'Concurrency lock period elapsed, continuing with message processing.',
+                    extra={
+                        'process_earliest': concurrency_earliest,
+                        'blob_time_created': concurrency_blob.time_created
+                    })
+                concurrency_blob.upload_from_string('')
+                return True
+            else:
+                logger.info(
+                    'Concurrency lock period not elapsed, not processing the message.',
+                    extra={
+                        'process_earliest': concurrency_earliest,
+                        'blob_time_created': concurrency_blob.time_created
+                    })
+        else:
+            logger.info(
+                'Concurrency lock file exists, not processing the message.',
+                extra={
+                    'bucket': concurrency_bucket,
+                    'blob': concurrency_file
+                })
+        if 'defer' in concurrency_config and concurrency_config['defer']:
+            raise ConcurrencyRetryException(
+                'Failing message processing due to concurrency control, allowing retry.'
+            )
+        return False
+    else:
+        try:
+            concurrency_blob.upload_from_string('', if_generation_match=0)
+        except Exception as exc:
+            # Handle TOCTOU condition
+            if 'conditionNotMet' in str(exc):
+                logger.warning(
+                    'Message processing already in progress (concurrency lock file exists).',
+                    extra={'exception': exc})
+                return False
+            else:
+                raise exc
+    return True
+
+
+def macro_helper(macro_func, *args, **kwargs):
+    r = macro_func(*args, **kwargs)
+    try:
+        if r.strip().startswith('[') or r.strip().startswith('{'):
+            e = eval(r)
+            return e
+        else:
+            return r
+    except SyntaxError:  # Probably a string, huh.
+        return r
+
+
+def process_message_pipeline(logger,
+                             config,
+                             data,
+                             event,
+                             context,
+                             using_webserver=False):
     template_variables = {
         'data': data,
         'event': event,
         'context': context,
+        'using_webserver': using_webserver
     }
-
     if len(config['pipeline']) == 0:
         raise NoPipelineConfiguredException('Empty pipeline configured!')
 
     jinja_environment = get_jinja_environment()
+    jinja_environment.globals = {
+        **jinja_environment.globals,
+        **template_variables
+    }
+
+    helper = BaseHelper(jinja_environment)
+
+    if 'macros' in config:
+        if not isinstance(config['macros'], list):
+            raise MalformedMacrosException(
+                '"macros" in configuration should be a list.')
+        macros = {}
+        for macro in config['macros']:
+            macro_template = jinja_environment.from_string(
+                macro['macro'].strip())
+            macro_template.name = 'macro'
+            macro_template.render()
+            macro_module = macro_template.module
+
+            for f in dir(macro_module):
+                if not f.startswith("_") and callable(getattr(macro_module, f)):
+                    macro_func = getattr(macro_module, f)
+                    macros[f] = partial(macro_helper, macro_func)
+
+        jinja_environment.globals.update(macros)
+
+    if 'globals' in config:
+        if not isinstance(config['globals'], dict):
+            raise MalformedGlobalsException(
+                '"globals" in configuration should be a dictionary.')
+
+        template_globals = helper._jinja_expand_dict_all(
+            config['globals'], 'globals')
+        jinja_environment.globals = {
+            **jinja_environment.globals,
+            **template_globals
+        }
+
+    if 'concurrency' in config:
+        if not handle_concurrency_pre(logger, config['concurrency'],
+                                      jinja_environment, template_variables):
+            return
+    if 'ignoreOn' in config:
+        if not handle_ignore_on(logger, config['ignoreOn'], jinja_environment,
+                                template_variables):
+            return
+
     task_number = 1
     for task in config['pipeline']:
         if 'type' not in task or not task['type']:
             raise NoTypeInPipelineException('No type in pipeline task #%d: %s' %
                                             (task_number, str(task)))
+
+        description = ' '
+        if 'description' in task:
+            description = ' "%s" ' % (task['description'])
 
         task_type, task_handler = task['type'].split('.', 2)
         if not task_type or not task_handler or task_type not in [
@@ -466,9 +693,11 @@ def process_message_pipeline(logger, config, data, event, context):
             stopif_template.name = 'stopif'
             stopif_contents = stopif_template.render()
             if stopif_contents.strip() != '':
+                jinja_environment.globals['previous_run'] = False
                 logger.info(
-                    'Pipeline task #%d (%s) stop-if condition evaluated to true, stopping processing.'
-                    % (task_number, task['type']))
+                    'Pipeline task%s#%d (%s) stop-if condition evaluated to true (non-empty), stopping processing.'
+                    % (description, task_number, task['type']))
+                helper._clean_tempdir()
                 return
 
         # Handle conditional execution mechanism
@@ -477,10 +706,29 @@ def process_message_pipeline(logger, config, data, event, context):
             runif_template.name = 'runif'
             runif_contents = runif_template.render()
             if runif_contents.strip() == '':
+                jinja_environment.globals['previous_run'] = False
                 logger.info(
-                    'Pipeline task #%d (%s) run-if condition evaluated to true, skipping task.'
-                    % (task_number, task['type']))
+                    'Pipeline task%s#%d (%s) run-if condition evaluated to false (empty), skipping task.'
+                    % (description, task_number, task['type']))
+                task_number += 1
                 continue
+
+        # Process task wide variables
+        if 'variables' in task:
+            for k, v in task['variables'].items():
+                if isinstance(v, dict):
+                    jinja_environment.globals[
+                        k] = helper._jinja_expand_dict_all(v, 'variable')
+                elif isinstance(v, list):
+                    jinja_environment.globals[k] = helper._jinja_expand_list(
+                        v, 'variable')
+                elif isinstance(v, int):
+                    jinja_environment.globals[k] = helper._jinja_expand_int(
+                        v, 'variable')
+                else:
+                    jinja_environment.globals[k] = helper._jinja_expand_string(
+                        v, 'variable')
+
         try:
             # Handle output variable expansion
             output_var = task['output'] if 'output' in task else None
@@ -502,8 +750,9 @@ def process_message_pipeline(logger, config, data, event, context):
             # Handle the actual work
             if task_type == 'processor':  # Handle processor
                 processor = task_handler
-                logger.debug('Pipeline task #%d (%s), running processor: %s' %
-                             (task_number, task['type'], processor))
+                logger.debug(
+                    'Pipeline task%s#%d (%s), running processor: %s' %
+                    (description, task_number, task['type'], processor))
                 mod = __import__('processors.%s' % processor)
                 processor_module = getattr(mod, processor)
                 processor_class = getattr(
@@ -518,14 +767,16 @@ def process_message_pipeline(logger, config, data, event, context):
                 else:
                     processor_variables = processor_instance.process()
                 template_variables.update(processor_variables)
+                template_variables['previous_run'] = True
                 jinja_environment.globals = {
                     **jinja_environment.globals,
                     **template_variables
                 }
             elif task_type == 'output':  # Handle output
                 output_type = task_handler
-                logger.debug('Pipeline task #%d (%s), running output: %s' %
-                             (task_number, task['type'], output_type))
+                logger.debug(
+                    'Pipeline task%s#%d (%s), running output: %s' %
+                    (description, task_number, task['type'], output_type))
                 mod = __import__('output.%s' % output_type)
                 output_module = getattr(mod, output_type)
                 output_class = getattr(output_module,
@@ -534,35 +785,95 @@ def process_message_pipeline(logger, config, data, event, context):
                                                jinja_environment, data, event,
                                                context)
                 output_instance.output()
+                # HTTP response
+                if output_instance.status_code and output_instance.body:
+                    context.http_response = (output_instance.status_code,
+                                             output_instance.headers,
+                                             output_instance.body)
+                jinja_environment.globals['previous_run'] = True
         except Exception as exc:
+            jinja_environment.globals['previous_run'] = False
             if 'canFail' not in task or not task['canFail']:
+
+                # Global output if a task fails
+                if 'onError' in config:
+                    error_task = config['onError']
+                    if 'type' not in error_task or not error_task['type']:
+                        raise NoTypeInPipelineException(
+                            'No type in pipeline onError task')
+
+                    jinja_environment.globals['exception'] = str(exc)
+
+                    error_task_type, error_task_handler = error_task[
+                        'type'].split('.', 2)
+
+                    error_task_config = {}
+                    if 'config' in error_task:
+                        error_task_config = error_task['config']
+
+                    output_type = error_task_handler
+                    logger.debug(
+                        'Pipeline onError task (%s), running output: %s' %
+                        (error_task['type'], output_type))
+                    mod = __import__('output.%s' % output_type)
+                    output_module = getattr(mod, output_type)
+                    output_class = getattr(
+                        output_module, '%sOutput' % output_type.capitalize())
+                    output_instance = output_class(error_task_config,
+                                                   error_task_config,
+                                                   jinja_environment, data,
+                                                   event, context)
+                    output_instance.output()
+
                 logger.error(
-                    'Pipeline task #%d (%s) failed, stopping processing.' %
-                    (task_number, task['type']),
+                    'Pipeline task%s#%d (%s) failed, stopping processing.' %
+                    (description, task_number, task['type']),
                     extra={'exception': traceback.format_exc()})
-                raise exc
+                if 'canFail' in config and config['canFail']:
+                    logger.warn(
+                        'Pipeline failed, but it is allowed to fail. Message processed.'
+                    )
+                    if 'concurrency' in config:
+                        handle_concurrency_post(logger, config['concurrency'],
+                                                jinja_environment,
+                                                template_variables)
+
+                    helper._clean_tempdir()
+                    return
+                else:
+                    if 'concurrency' in config:
+                        handle_concurrency_post(logger, config['concurrency'],
+                                                jinja_environment,
+                                                template_variables)
+                    helper._clean_tempdir()
+                    raise exc
             else:
                 logger.warning(
-                    'Pipeline task #%d (%s) failed, but continuing...' %
-                    (task_number, task['type']),
+                    'Pipeline task%s#%d (%s) failed, but continuing...' %
+                    (description, task_number, task['type']),
                     extra={'exception': traceback.format_exc()})
 
         task_number += 1
+    if 'concurrency' in config:
+        handle_concurrency_post(logger, config['concurrency'],
+                                jinja_environment, template_variables)
+    helper._clean_tempdir()
 
 
-def process_message(config, data, event, context):
+def process_message(config, data, event, context, using_webserver=False):
     logger = logging.getLogger('pubsub2inbox')
 
     check_retry_period(config, context, logger)
 
     if 'pipeline' in config and isinstance(config['pipeline'], list):
-        process_message_pipeline(logger, config, data, event, context)
+        process_message_pipeline(logger, config, data, event, context,
+                                 using_webserver)
     else:
         process_message_legacy(logger, config, data, event, context)
 
 
-def decode_and_process(logger, config, event, context):
-    if not 'data' in event:
+def decode_and_process(logger, config, event, context, using_webserver=False):
+    if 'data' not in event:
         raise NoDataFieldException('No data field in Pub/Sub message!')
 
     logger.debug('Decoding Pub/Sub message...',
@@ -572,7 +883,10 @@ def decode_and_process(logger, config, event, context):
                      'hostname': socket.gethostname(),
                      'pid': os.getpid()
                  })
-    data = base64.b64decode(event['data']).decode('raw_unicode_escape')
+    if event['data'] != '':
+        data = base64.b64decode(event['data']).decode('raw_unicode_escape')
+    else:
+        data = None
 
     logger.debug('Starting Pub/Sub message processing...',
                  extra={
@@ -580,12 +894,15 @@ def decode_and_process(logger, config, event, context):
                      'data': data,
                      'attributes': event['attributes']
                  })
-    process_message(config, data, event, context)
+    process_message(config, data, event, context, using_webserver)
     logger.debug('Pub/Sub message processing finished.',
                  extra={'event_id': context.event_id})
 
 
-def process_pubsub(event, context, message_too_old_exception=False):
+def process_pubsub(event,
+                   context,
+                   message_too_old_exception=False,
+                   using_webserver=False):
     """Function that is triggered by Pub/Sub incoming message.
     Args:
          event (dict):  The dictionary with data specific to this type of
@@ -600,23 +917,35 @@ def process_pubsub(event, context, message_too_old_exception=False):
 
     if not logger:
         logger = setup_logging()
-    logger.debug('Received a Pub/Sub message.',
-                 extra={
-                     'event_id': context.event_id,
-                     'timestamp': context.timestamp,
-                     'hostname': socket.gethostname(),
-                     'pid': os.getpid(),
-                     'execution_count': execution_count
-                 })
+    if using_webserver:
+        logger.debug('Received an API call.',
+                     extra={
+                         'event_id': context.event_id,
+                         'timestamp': context.timestamp,
+                         'hostname': socket.gethostname(),
+                         'pid': os.getpid(),
+                         'execution_count': execution_count
+                     })
+    else:
+        logger.debug('Received a Pub/Sub message.',
+                     extra={
+                         'event_id': context.event_id,
+                         'timestamp': context.timestamp,
+                         'hostname': socket.gethostname(),
+                         'pid': os.getpid(),
+                         'execution_count': execution_count
+                     })
+
     socket.setdefaulttimeout(10)
     if not configuration:
         configuration = load_configuration(config_file_name)
     try:
-        decode_and_process(logger, configuration, event, context)
+        decode_and_process(logger, configuration, event, context,
+                           using_webserver)
     except TemplateError as exc:
         logger.error('Error while evaluating a Jinja2 template!',
                      extra={
-                         'message': exc.message(),
+                         'error_message': exc,
                          'error': str(exc),
                      })
         raise exc
@@ -625,6 +954,62 @@ def process_pubsub(event, context, message_too_old_exception=False):
             pass
         else:
             raise (mtoe)
+
+
+def process_pubsub_v2(event, context, message_too_old_exception=False):
+    """Function that is triggered by Pub/Sub incoming message for functions V2.
+    Args:
+         event (dict):  The dictionary with data specific to this type of
+         event. The `data` field contains the PubsubMessage message. The
+         `attributes` field will contain custom attributes if there are any.
+         context (google.cloud.functions.Context): The Cloud Functions event
+         metadata. The `event_id` field contains the Pub/Sub message ID. The
+         `timestamp` field contains the publish time.
+    """
+    global logger
+
+    if not logger:
+        logger = setup_logging()
+
+    new_context = Context(eventId=context.event_id,
+                          timestamp=context.timestamp,
+                          eventType=context.event_type,
+                          resource=context.resource)
+    if 'attributes' not in event:
+        event['attributes'] = {}
+    if 'data' not in event:
+        event['data'] = ''
+    process_pubsub(event, new_context)
+
+
+def process_api_v2(request):
+    """Function that is triggered by API request for functions V2.
+    """
+    global logger
+
+    if not logger:
+        logger = setup_logging()
+
+    request_headers = json.loads(json.dumps({**request.headers}))
+    if 'authorization' in request_headers:
+        del request_headers['authorization']
+    event = {
+        'data':
+            base64.b64encode(json.dumps(request.get_json()).encode('utf-8')),
+        'attributes': {
+            'headers': request_headers
+        }
+    }
+    context = Context(timestamp=datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'))
+    process_pubsub(event,
+                   context,
+                   message_too_old_exception=True,
+                   using_webserver=True)
+    if context.http_response:
+        return Response(response=context.http_response[2],
+                        status=context.http_response[0],
+                        headers=context.http_response[1])
+    return Response(response="", status=200)
 
 
 class CloudRunServer:
@@ -646,30 +1031,64 @@ class CloudRunServer:
             import falcon
             res.content_type = falcon.MEDIA_TEXT
 
-            try:
-                envelope = req.media
-            except falcon.MediaNotFoundError:
-                raise NoMessageReceivedException('No Pub/Sub message received')
-            except falcon.MediaMalformedError:
-                raise InvalidMessageFormatException('Invalid Pub/Sub JSON')
+            # Check if this is an API call
+            context = None
+            event = None
+            using_webserver = False
+            if req.url[-4:] != '/api':
+                try:
+                    envelope = req.media
+                except falcon.MediaNotFoundError:
+                    raise NoMessageReceivedException(
+                        'No Pub/Sub message received')
+                except falcon.MediaMalformedError:
+                    raise InvalidMessageFormatException('Invalid Pub/Sub JSON')
 
-            if not isinstance(envelope, dict) or 'message' not in envelope:
-                raise InvalidMessageFormatException(
-                    'Invalid Pub/Sub message format')
+                if not isinstance(envelope, dict) or 'message' not in envelope:
+                    raise InvalidMessageFormatException(
+                        'Invalid Pub/Sub message format')
 
-            event = {
-                'data':
-                    envelope['message']['data'],
-                'attributes':
-                    envelope['message']['attributes']
-                    if 'attributes' in envelope['message'] else {}
-            }
+                event = {
+                    'data':
+                        envelope['message']['data'],
+                    'attributes':
+                        envelope['message']['attributes']
+                        if 'attributes' in envelope['message'] else {}
+                }
+                context = Context(eventId=envelope['message']['messageId'],
+                                  timestamp=envelope['message']['publishTime'])
+            else:
+                try:
+                    envelope = req.media
+                except falcon.MediaNotFoundError:
+                    raise NoMessageReceivedException('No request received')
+                except falcon.MediaMalformedError:
+                    raise InvalidMessageFormatException('Invalid Pub/Sub JSON')
+                request_headers = req.headers
+                if 'authorization' in request_headers:
+                    del request_headers['authorization']
+                event = {
+                    'data':
+                        base64.b64encode(json.dumps(envelope).encode('utf-8')),
+                    'attributes': {
+                        'headers': request_headers
+                    }
+                }
+                context = Context(
+                    timestamp=datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ'))
+                using_webserver = True
 
-            context = Context(eventId=envelope['message']['messageId'],
-                              timestamp=envelope['message']['publishTime'])
-            process_pubsub(event, context, message_too_old_exception=True)
-            res.status = falcon.HTTP_200
-            res.text = 'Message processed.'
+            process_pubsub(event,
+                           context,
+                           message_too_old_exception=True,
+                           using_webserver=using_webserver)
+            if context.http_response:
+                res.status = context.http_response[0]
+                res.set_headers(context.http_response[1])
+                res.text = context.http_response[2]
+            else:
+                res.status = falcon.HTTP_200
+                res.text = 'Message processed.'
         except (NoMessageReceivedException,
                 InvalidMessageFormatException) as me:
             # Do not attempt to retry malformed messages
@@ -712,6 +1131,7 @@ def run_webserver(run_locally=False):
         app = falcon.App()
         server = CloudRunServer()
         app.add_route('/', server)
+        app.add_route('/api', server)
         if run_locally:
             from waitress import serve
             port = 8080 if not os.getenv('PORT') or os.getenv(
@@ -743,9 +1163,15 @@ if __name__ == '__main__':
                             type=str,
                             nargs='?',
                             help='JSON file containing the message(s)')
+    arg_parser.add_argument('--set',
+                            nargs='*',
+                            type=lambda s: tuple(s.split('=', 2)),
+                            help='Set a Jinja variable from command line')
     args = arg_parser.parse_args()
     if args.config:
         config_file_name = args.config
+    if args.set:
+        extra_vars = args.set
     if args.webserver or os.getenv('WEBSERVER') == '1':
         run_webserver(True)
     else:
@@ -759,7 +1185,8 @@ if __name__ == '__main__':
             for message in messages:
                 event = {
                     'data':
-                        message['message']['data'],
+                        message['message']['data']
+                        if 'data' in message['message'] else '',
                     'attributes':
                         message['message']['attributes']
                         if 'attributes' in message['message'] else {}

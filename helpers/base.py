@@ -21,12 +21,41 @@ import google_auth_httplib2
 import google.auth
 from googleapiclient import http
 from google.cloud import resourcemanager_v3
+import json_fix  # noqa: F401
+import tempfile
 
-PUBSUB2INBOX_VERSION = '1.4.6'
+PUBSUB2INBOX_VERSION = '1.8.2'
+TEMPORARY_DIRECTORY = None
 
 
 class NoCredentialsException(Exception):
     pass
+
+
+class Context(object):
+
+    def __init__(self, eventId="", timestamp="", eventType="", resource=""):
+        self.event_id = eventId
+        self.timestamp = timestamp
+        self.event_type = eventType
+        self.resource = resource
+        self.http_response = None
+
+    def __json__(self):
+        return "{\"event_id\": \"%s\", \"timestamp\": \"%s\", \"event_type\": \"%s\", \"resource\": \"%s\"}" % (
+            self.event_id,
+            self.timestamp,
+            self.event_type,
+            self.resource,
+        )
+
+    def __str__(self):
+        return "{event_id: %s, timestamp: %s, event_type: %s, resource: %s}" % (
+            self.event_id,
+            self.timestamp,
+            self.event_type,
+            self.resource,
+        )
 
 
 def get_user_agent():
@@ -49,12 +78,26 @@ def get_grpc_client_info():
 
 class BaseHelper:
     logger = None
-    jinja_environment = None
-    project_number_cache = {}
 
     def __init__(self, jinja_environment):
+        self.project_number_cache = {}
         self.jinja_environment = jinja_environment
         self.logger = logging.getLogger('pubsub2inbox')
+
+    def _init_tempdir(self):
+        global TEMPORARY_DIRECTORY
+        if not TEMPORARY_DIRECTORY:
+            TEMPORARY_DIRECTORY = tempfile.TemporaryDirectory()
+            self.logger.debug('Created temporary directory: %s' %
+                              (TEMPORARY_DIRECTORY.name))
+            os.chdir(TEMPORARY_DIRECTORY.name)
+
+    def _clean_tempdir(self):
+        global TEMPORARY_DIRECTORY
+        if TEMPORARY_DIRECTORY:
+            self.logger.debug('Cleaning temporary directory: %s' %
+                              (TEMPORARY_DIRECTORY.name))
+            TEMPORARY_DIRECTORY = None
 
     def _get_user_agent(self):
         return get_user_agent()
@@ -94,6 +137,11 @@ class BaseHelper:
         response = client.generate_access_token(name=name, scope=scopes)
         return response.access_token
 
+    def _jinja_expand_expr(self, contents, _tpl='config'):
+        expr = self.jinja_environment.compile_expression(contents,
+                                                         undefined_to_none=True)
+        return expr()
+
     def _jinja_expand_bool(self, contents, _tpl='config'):
         if isinstance(contents, bool):
             return contents
@@ -103,6 +151,18 @@ class BaseHelper:
         if val_str == 'true' or val_str == 't' or val_str == 'yes' or val_str == 'y' or val_str == '1':
             return True
         return False
+
+    def _jinja_expand_bool_str(self, contents, _tpl='config'):
+        if isinstance(contents, bool):
+            return contents
+        var_template = self.jinja_environment.from_string(contents)
+        var_template.name = _tpl
+        val_str = var_template.render().lower()
+        if val_str == 'true' or val_str == 't' or val_str == 'yes' or val_str == 'y' or val_str == '1':
+            return True
+        if val_str == 'false' or val_str == 'f' or val_str == 'no' or val_str == 'n' or val_str == '0':
+            return False
+        return val_str
 
     def _jinja_expand_string(self, contents, _tpl='config'):
         var_template = self.jinja_environment.from_string(contents)
@@ -119,6 +179,14 @@ class BaseHelper:
         var_template.name = _tpl
         val_str = var_template.render()
         return int(val_str)
+
+    def _jinja_expand_float(self, contents, _tpl='config'):
+        if isinstance(contents, float):
+            return contents
+        var_template = self.jinja_environment.from_string(contents)
+        var_template.name = _tpl
+        val_str = var_template.render()
+        return float(val_str)
 
     def _jinja_var_to_list(self, _var, _tpl='config'):
         if isinstance(_var, list):
@@ -188,9 +256,36 @@ class BaseHelper:
                             _var[k][idx] = self._jinja_expand_dict_all(lv)
                         if isinstance(lv, str):
                             _var[k][idx] = self._jinja_expand_string(lv)
-                else:
-                    _var[k] = self._jinja_expand_dict_all(_var[k])
+            else:
+                _var[k] = self._jinja_expand_dict_all(_var[k])
         return _var
+
+    def _jinja_expand_dict_all_expr(self, _var, _tpl='config'):
+        _new_var = {}
+        if not isinstance(_var, dict):
+            return _var
+        for k, v in _var.items():
+            if not isinstance(v, dict):
+                if isinstance(v, str):
+                    if k.endswith('Expr'):
+                        _new_var[k[0:len(k) - 4]] = self._jinja_expand_expr(v)
+                    else:
+                        _new_var[k] = self._jinja_expand_string(v)
+                if isinstance(v, int):
+                    _new_var[k] = self._jinja_expand_int(v)
+                if isinstance(v, float):
+                    _new_var[k] = self._jinja_expand_float(v)
+                if isinstance(v, list):
+                    _new_var[k] = []
+                    for idx, lv in enumerate(_var[k]):
+                        if isinstance(lv, dict):
+                            _new_var[k].append(
+                                self._jinja_expand_dict_all_expr(lv))
+                        if isinstance(lv, str):
+                            _new_var[k].append(self._jinja_expand_string(lv))
+            else:
+                _new_var[k] = self._jinja_expand_dict_all_expr(_var[k])
+        return _new_var
 
     def _jinja_expand_list(self, _var, _tpl='config'):
         if not isinstance(_var, list):

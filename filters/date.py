@@ -36,9 +36,9 @@ def strftime(timestamp_string, strftime_format):
                 version=parsedatetime.VERSION_CONTEXT_STYLE).parse(
                     timestamp_string)
             if len(parsed) > 1:
-                dt = datetime.fromtimestamp(mktime(parsed[0]))
+                dt = datetime(*parsed[0][:6])
             else:
-                dt = datetime.fromtimestamp(mktime(parsed))
+                dt = datetime(*parsed[:6])
 
     return dt.strftime(strftime_format)
 
@@ -61,7 +61,7 @@ def utc_strftime(timestamp_string, strftime_format):
 
 
 def recurring_date(event, now_date=None, strftime_format='%Y-%m-%d'):
-    if now_date != None:
+    if now_date is not None:
         time_struct, parse_status = parsedatetime.Calendar(
             version=parsedatetime.VERSION_CONTEXT_STYLE).parse(now_date)
         if not parse_status:

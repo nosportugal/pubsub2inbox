@@ -13,17 +13,9 @@ Bases: `Exception`
 Bases: [`BaseHelper`](helpers.md#helpers.base.BaseHelper)
 
 
-#### config(_ = Non_ )
-
-#### context(_: Contex_ )
-
-#### data(_ = Non_ )
-
-#### event(_ = Non_ )
-
 #### _abstract_ output()
 
-#### output_config(_ = Non_ )
+#### outputHttpResponse(status_code, headers, body)
 ## output.bigquery module
 
 
@@ -52,21 +44,46 @@ BigQuery output processors can write data into BigQuery tables.
 
 
 
-#### context(_: Contex_ )
-
 #### output()
 
 ### _exception_ output.bigquery.InvalidJobOptionException()
 Bases: `Exception`
 
+## output.chat module
+
+
+### _class_ output.chat.ChatOutput(config, output_config, jinja_environment, data, event, context)
+Bases: `Output`
+
+Sends message to a Google Chat space.
+
+
+* **Parameters**
+
+    
+    * **serviceAccountEmail** (*str*) – A service account email for which a scoped token will be requested.
+    You should invite this service account to the space. The Cloud Functions has to has Service
+    Account Token Creator to this service account. Can also be specified via SERVICE_ACCOUNT
+    environment variable.
+
+
+    * **parent** (*str*) – A Google Chat space (spaces/XYZ).
+
+
+    * **message** (*dict*) – A Message object (see: [https://developers.google.com/chat/api/reference/rest/v1/spaces.messages#Message](https://developers.google.com/chat/api/reference/rest/v1/spaces.messages#Message)).
+
+
+    * **project** (*str**, **optional*) – Google Cloud project to issue Chat API calls against.
+
+
+
+#### output()
 ## output.delay module
 
 
 ### _class_ output.delay.DelayOutput(config, output_config, jinja_environment, data, event, context)
 Bases: `Output`
 
-
-#### context(_: Contex_ )
 
 #### output()
 ## output.gcs module
@@ -75,8 +92,31 @@ Bases: `Output`
 ### _class_ output.gcs.GcsOutput(config, output_config, jinja_environment, data, event, context)
 Bases: `Output`
 
+Writes contents to Google Cloud Storage.
 
-#### context(_: Contex_ )
+
+* **Parameters**
+
+    
+    * **bucket** (*str*) – Target bucket name.
+
+
+    * **object** (*str**, **optional*) – Target object name. Either specify object or objects.
+
+
+    * **objects** (*list**, **optional*) – Target objects when writing multiple files. Contents template will be
+    called multiple times with filename and key variables.
+
+
+    * **contents** (*str**, **optional*) – Contents to write to target file. Either specify contents or file.
+
+
+    * **file** (*str**, **optional*) – File to write.
+
+
+    * **project** (*str**, **optional*) – Google Cloud project to issue Cloud Storage API calls against.
+
+
 
 #### output()
 ## output.gcscopy module
@@ -86,8 +126,6 @@ Bases: `Output`
 Bases: `Output`
 
 
-#### context(_: Contex_ )
-
 #### output()
 ## output.groupssettings module
 
@@ -96,7 +134,13 @@ Bases: `Output`
 Bases: `Output`
 
 
-#### context(_: Contex_ )
+#### output()
+## output.httpresponse module
+
+
+### _class_ output.httpresponse.HttpresponseOutput(config, output_config, jinja_environment, data, event, context)
+Bases: `Output`
+
 
 #### output()
 ## output.logger module
@@ -105,8 +149,6 @@ Bases: `Output`
 ### _class_ output.logger.LoggerOutput(config, output_config, jinja_environment, data, event, context)
 Bases: `Output`
 
-
-#### context(_: Contex_ )
 
 #### output()
 ## output.mail module
@@ -131,8 +173,6 @@ Bases: `Exception`
 ### _class_ output.mail.MailOutput(config, output_config, jinja_environment, data, event, context)
 Bases: `Output`
 
-
-#### context(_: Contex_ )
 
 #### embed_images(config)
 
@@ -164,8 +204,6 @@ Bases: `Output`
 
 #### callback(future)
 
-#### context(_: Contex_ )
-
 #### output()
 ## output.scc module
 
@@ -174,7 +212,28 @@ Bases: `Output`
 Bases: `Output`
 
 
-#### context(_: Contex_ )
+#### output()
+## output.slack module
+
+
+### _class_ output.slack.SlackOutput(config, output_config, jinja_environment, data, event, context)
+Bases: `Output`
+
+Sends messages to Slack and call other Slack APIs too.
+
+
+* **Parameters**
+
+    
+    * **token** (*str*) – A Slack Bot User OAuth Token.
+
+
+    * **api** (*str*) – A Slack API call, such as chat.postMessage.
+
+
+    * **request** (*dict*) – The API call body.
+
+
 
 #### output()
 ## output.test module
@@ -188,8 +247,6 @@ Bases: `Exception`
 Bases: `Output`
 
 
-#### context(_: Contex_ )
-
 #### output()
 ## output.twilio module
 
@@ -198,8 +255,6 @@ Bases: `Output`
 Bases: `Output`
 
 
-#### context(_: Contex_ )
-
 #### output()
 ## output.webhook module
 
@@ -207,8 +262,6 @@ Bases: `Output`
 ### _class_ output.webhook.WebhookOutput(config, output_config, jinja_environment, data, event, context)
 Bases: `Output`
 
-
-#### context(_: Contex_ )
 
 #### output()
 ## Module contents

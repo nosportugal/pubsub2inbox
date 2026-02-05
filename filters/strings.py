@@ -27,6 +27,10 @@ import re
 import logging
 import hashlib
 import yaml
+import json_fix  # noqa: F401
+from pathlib import Path
+import parse
+import os
 
 
 def make_list(s):
@@ -119,6 +123,14 @@ def read_gcs_object(url, start=None, end=None):
     return base64.encodebytes(contents).decode('utf-8')
 
 
+def read_file(filename):
+    return Path(filename).read_text()
+
+
+def read_file_b64(filename):
+    return base64.b64encode(Path(filename).read_bytes())
+
+
 def filemagic(contents):
     with magic.Magic(flags=magic.MAGIC_MIME_TYPE) as m:
         return m.id_buffer(base64.b64decode(contents))
@@ -166,3 +178,55 @@ def hash_string(v, hash_type='md5'):
     h = hashlib.new(hash_type)
     h.update(v.encode('utf-8'))
     return h.hexdigest()
+
+
+def parse_string(v, spec):
+    r = parse.parse(spec, v)
+    if r is not None:
+        return r.named
+    return None
+
+
+def parse_url(v):
+    parsed_url = urllib.parse.urlparse(v)
+    res = {}
+    for k in dir(parsed_url):
+        if not k.startswith('_'):
+            res[k] = getattr(parsed_url, k)
+    res['name'] = os.path.basename(res['path'])
+    res['prefix'] = os.path.dirname(res['path'])
+    return res
+
+
+def trim(v):
+    return v.strip()
+
+
+def ltrim(v):
+    return v.lstrip()
+
+
+def rtrim(v):
+    return v.rstrip()
+
+
+def remove_mrkdwn(v, links=False, italic=True):
+    if isinstance(v, list):
+        removed = []
+        for s in v:
+            removed.append(remove_mrkdwn(s, links, italic))
+        return removed
+    if not isinstance(v, str):
+        return v
+    if links:
+        v = re.sub(r'<([^\|]*)\|[^\|]*>', r'\1', v)
+    else:
+        v = re.sub(r'<[^\|]*\|([^\|]*)>', r'\1', v)
+    # bolding
+    v = re.sub(r'\*([\w\s!\?\(\)\{\}\.,:;\+=&]+)\*', r'\1', v)
+    # strikethrough
+    v = re.sub(r'~([\w\s!\?\(\)\{\}\.,:;\+=&]+)~', r'\1', v)
+    # italic (can be a bit problematic, so disabled by default)
+    if italic:
+        v = re.sub(r'\_([a-zA-Z0-9\s!\?\(\)\{\}\.,:;\+=&]+?)\_', r'\1', v)
+    return v

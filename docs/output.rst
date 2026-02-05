@@ -20,6 +20,14 @@ output.bigquery module
    :undoc-members:
    :show-inheritance:
 
+output.chat module
+------------------
+
+.. automodule:: output.chat
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 output.delay module
 -------------------
 
@@ -52,6 +60,14 @@ output.groupssettings module
    :undoc-members:
    :show-inheritance:
 
+output.httpresponse module
+--------------------------
+
+.. automodule:: output.httpresponse
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 output.logger module
 --------------------
 
@@ -80,6 +96,14 @@ output.scc module
 -----------------
 
 .. automodule:: output.scc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+output.slack module
+-------------------
+
+.. automodule:: output.slack
    :members:
    :undoc-members:
    :show-inheritance:

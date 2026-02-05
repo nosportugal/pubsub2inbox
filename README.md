@@ -2,41 +2,51 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) ![Tests](https://github.com/GoogleCloudPlatform/pubsub2inbox/actions/workflows/test.yml/badge.svg)
 
 
-Pubsub2Inbox is a generic tool to handle input from Pub/Sub messages and turn them into
-email, webhooks or GCS objects. It's based on an extendable framework consisting of input 
+Pubsub2Inbox is a versatile, multi-purpose tool to handle Pub/Sub messages and turn them into email, API calls, 
+CS objects, files or almost anything. It's based on an extendable framework consisting of input 
 and output processors. Input processors can enrich the incoming messages with details
-(for example, fetching the budget from Cloud Billing Budgets API). Multiple output
-processors can be chained together. 
+(for example, fetching the budget from Cloud Billing Budgets API, calling different GCP API or
+third party services). Multiple input and output processors can be chained together in a pipeline. 
 
-Pubsub2Inbox is written in Python 3.8+ and can be deployed as a Cloud Function or as a 
+Pubsub2Inbox is written in Python 3.8+ and can be deployed as a Cloud Function v1/v2 or as a 
 Cloud Run function easily. To guard credentials and other sensitive information, the tool can 
 fetch its YAML configuration from Google Cloud Secret Manager.
 
 The tool also supports templating of emails, messages and other parameters through
-[Jinja2 templating](https://jinja.palletsprojects.com/en/2.10.x/templates/).
+[Jinja2 templating](https://jinja.palletsprojects.com/en/2.10.x/templates/), with additional
+filters and functions added.
 
 *Please note:* You cannot connect to SMTP port 25 from GCP. Use alternative ports 465 or 587,
 or connect via [Serverless VPC Connector](https://cloud.google.com/vpc/docs/configure-serverless-vpc-access) to your own mailservers.
 
-## Out of the box
+*Also check out [Json2Pubsub](cmd/json2pubsub/), a complementary any-webhook-to-Pub/Sub tool!*
 
-Out of the box, you'll have the following functionality:
+## Out of the box experience
+
+Out of the box, you'll have the following functionality available as examples:
 
 | Title                         | Example use cases                                                                                                                                                                                                                             | Samples                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vertex AI                     | A Slack bot using Vertex AI Generative AI models.                                                                                                                                                                                             | [Vertex AI Slack bot](examples/vertexgenai-slack-bot) (also see [blog post](https://taneli-leppa.medium.com/building-an-ai-slack-bot-using-vertex-generative-ai-d5f2c9e5e0b0))<br/>[Multi-modal Gemini Slack bot](examples/gemini-pro-slack-bot/)                                                                                              |
 | Budget alerts                 | Get email if a project's budget exceeds certain limit. For more information, see [How to set up programmatic notifications from billing budgets](https://cloud.google.com/billing/docs/how-to/budgets-programmatic-notifications).            | [Budget alerts](examples/budget-config.yaml)                                                                                                                                                                                                                                                                                                   |
 | Cloud Security Command Center | Send emails when a new security finding is made (see [how to set up finding notifications from SCC](https://cloud.google.com/security-command-center/docs/how-to-notifications)), or create new findings from any Pub/Sub message.            | [Email notifications of findings](examples/scc-config.yaml)<br />[Create findings from Cloud IDS](examples/scc-cloud-ids.yaml)<br />[Create custom findings](examples/scc-finding-config.yaml)                                                                                                                                                 |
+| Containers                    | Synchronize container images from Artifactory to Artifact Registry.                                                                                                                                                                           | [Artifactory to Artifact Registry.](examples/artifactory-to-artifact-registry)                                                                                                                                                                                                                                                                 |
+| Container Analysis            | Creates GitHub issues automatically on new vulnerabilities in containers.                                                                                                                                                                     | [Create issue on Github for vulnerabilities](examples/container-analysis.yaml)<br />[Slack bot that posts new vulnerabilities](examples/container-analysis-slack.yaml)<br />[Full Github example](examples/github.yaml)                                                                                                                        |
 | Cloud Storage                 | When a new report arrives in a bucket, send it out as an email attachment. Or copy files to a backup bucket as soon as they arrive. See: [How to set up Cloud Storage notifications](https://cloud.google.com/storage/docs/reporting-changes) | [Cloud Storage notifications](examples/storage-example.yaml)<br />[Cloud Storage backup copier](examples/gcscopy-example.yaml)                                                                                                                                                                                                                 |
 | BigQuery                      | Run BigQuery queries on a schedule and turn the results into CSV or spreadsheets and send them out as email attachments.                                                                                                                      | [BigQuery queries](examples/bigquery-example.yaml)                                                                                                                                                                                                                                                                                             |
 | Recommendations               | Generate recommendations and insights for project owner's on a scheduled basis. Uses [Recommender API](https://cloud.google.com/recommender/docs/overview).                                                                                   | [Recommendations and Insights reports](examples/recommendations/)<br />[Example with attached spreadsheet](examples/recommendations/per-project/recommendations.yaml)<br />[Example with with GCS and BigQuery output](examples/recommendations/all-projects/recommendations-example-3.yaml).                                                  |
-| Cloud Monitoring              | Send alerts from Cloud Monitoring via your own SMTP servers, or use an unsupported messaging platform. Or run Cloud Monitoring MQL queries and send the results.                                                                              | [Cloud Monitoring alerts](examples/monitoring-alert-config.yaml)<br />[Service account usage reporting using Cloud Monitoring and Cloud Asset Inventory](examples/cai-example.yaml)                                                                                                                                                            |
+| Compute Engine                | Start and stop instances, detach and attach disks, patch load balancer backends. services.                                                                                                                                                    | [Compute Engine instance control](examples/computeengine-example.yaml)                                                                                                                                                                                                                                                                         |
+| Cloud Monitoring              | Send alerts from Cloud Monitoring via your own SMTP servers, or use an unsupported messaging platform. Or run Cloud Monitoring MQL queries and send the results.                                                                              | [Cloud Monitoring alerts](examples/monitoring-alert-config.yaml)<br />[Service account usage reporting using Cloud Monitoring and Cloud Asset Inventory](examples/cai-example.yaml)<br />[OpsGenie alert integration](examples/opsgenie-example.yaml)                                                                                          |
+| Cloud Logging                 | Query Cloud Run job logs after execution and email them.                                                                                                                                                                                      | [Cloud Run job logs](examples/cloud-run-jobs)                                                                                                                                                                                                                                                                                                  |
 | Cloud Asset Inventory         | Use Cloud Asset Inventory to fetch resources organization-wide.                                                                                                                                                                               | [Fetch all service accounts from CAI](examples/cai-example.yaml)                                                                                                                                                                                                                                                                               |
 | Cloud Identity                | Fetch groups or memberships, or change group settings. For example, build a report of members in a group for review and send it out via email.                                                                                                | [Cloud Identity groups](examples/groups-example.yaml)<br />[Another example](examples/groups-example-2.yaml)<br />[Groups that allow external members](examples/external-groups-example.yaml)<br />[Example of Directory API](examples/directory-example.yaml)<br />[Update group default settings on creation](examples/groups-settings.yaml) |
 | Cloud DNS                     | Add or remove records based on Pub/Sub messages.                                                                                                                                                                                              | [Add DNS entries](examples/dns-example.yaml)                                                                                                                                                                                                                                                                                                   |
 | Resource Manager              | List and search for GCP projects.                                                                                                                                                                                                             | [GCP projects](examples/projects-example.yaml)                                                                                                                                                                                                                                                                                                 |
+| Secret Manager                | Fetch secrets from Secret Manager.                                                                                                                                                                                                            | [Retrieve secret](examples/secret-example.yaml)                                                                                                                                                                                                                                                                                                |
 | Scripting                     | Run any binary or shell script and parse the output (supports JSON, YAML, CSV, etc.)                                                                                                                                                          | [Shell processor](examples/shellscript-config.yaml)                                                                                                                                                                                                                                                                                            |
+| Utilities                     | Download files using HTTP, FTP or SFTP. Clone Git repositories.                                                                                                                                                                               | [Utilities](examples/utilities-example.yaml)                                                                                                                                                                                                                                                                                                   |
 | Transcoder                    | Transcode video and audio using [Transcoder API](https://cloud.google.com/transcoder).                                                                                                                                                        | [Transcoding a video](examples/transcode-example.yaml)                                                                                                                                                                                                                                                                                         |
-| Third party                   | Send SMS messages.                                                                                                                                                                                                                            | [Send SMS messages using Twilio](examples/twilio-example.yaml)                                                                                                                                                                                                                                                                                 |
+| Messaging                     | Send messages to Google Chat or SMS messages.                                                                                                                                                                                                 | [Send SMS messages using Twilio](examples/twilio-example.yaml)<br />[Cloud Deploy notifications to Google Chat](examples/chat-example.yaml) (also see the [blog post](https://taneli-leppa.medium.com/creating-a-google-cloud-deploy-bot-on-google-chat-17601fdaf4d6))<br />[GitHub issues to Google Chat](examples/github-to-chat/)           |
 | JSON                          | Generic JSON parser.                                                                                                                                                                                                                          | [Generic JSON processing](examples/generic-config.yaml)                                                                                                                                                                                                                                                                                        |
   
 ## Input processors
@@ -60,13 +70,26 @@ Available input processors are:
   - [shellscript.py](processors/shellscript.py): Run any binary or shell script and parse the output (JSON, YAML, CSV, TSV, ...)
   - [transcode.py](processors/transcode.py): Transcode media using Transcoder API.
   - [dns.py](processors/dns.py): Issue change requests to Cloud DNS.
+  - [secret.py](processors/secret.py): Fetches (additional) secrets from Secret Manager.
+  - [github.py](processors/github.py): List, get or create issues and comments in GitHub.
+  - [download.py](processors/download.py): Download files using HTTP, FTP and SFTP.
+  - [git.py](processors/git.py): Clone repositories via HTTP or SSH.
+  - [clouddeploy.py](processors/clouddeploy.py): Work with releases and rollouts on Cloud Deploy.
+  - [setvariable.py](processors/setvariable.py): Set global variables.
+  - [computeengine.py](processors/computeengine.py): Manipulate Compute Engine resources.
+  - [loadbalancing.py](processors/loadbalancing.py): Change load balancer settings.
+  - [cloudrun.py](processors/cloudrun.py): Query Cloud Run things (like jobs).
+  - [logging.py](processors/logging.py): List entries from Cloud Logging.
+  - [opsgenie.py](processors/opsgenie.py): OpsGenie alert and incident management.
+  - [docker.py](processors/docker.py): Push, pull and delete Docker images from a Docker registry.
+
 
 For full documentation of permissions, processor input and output parameters, see [PROCESSORS.md](PROCESSORS.md).
 
 Please note that the input processors have some IAM requirements to be able to
 pull information from GCP:
 
- - Resend mechanism (see below)
+ - Resend mechanism and concurrency control (see below)
     - Storage Object Admin (`roles/storage.objectAdmin`)
  - Signed URL generation (see `filters/strings.py:generate_signed_url`)
     - Storage Admin on the bucket (`roles/storage.admin`)
@@ -87,6 +110,9 @@ Available output processors are:
   - [scc.py](output/scc.py): Sends findings to Cloud Security Command Center.
   - [twilio.py](output/twilio.py): Sends SMS messages via Twilio API.
   - [groupssettings.py](output/groupssettings.py): Updates Google Groups settings.
+  - [chat.py](output/chat.py): Send messages to Google Chat.
+  - [slack.py](output/slack.py): Send messages (and other things) to Slack API.
+  - [delay.py](output/delay.py): Delay processing by pausing execution for specified time.
 
 Please note that the output processors have some IAM requirements to be able to
 pull information from GCP:
@@ -97,6 +123,8 @@ pull information from GCP:
       to grant permissions to the service account the function is running under. 
     - In addition, the service account that the script runs under will need to have `roles/iam.serviceAccountTokenCreator` on itself when
       running in Cloud Function/Cloud Run (for Directory API scoped tokens).
+
+For more documentation, see [output.md](docs/build/docs/output.md).
 
 ## Configuring Pubsub2Inbox
 
@@ -109,34 +137,40 @@ The YAML file is structured of the following top level keys:
 
   - `pipeline`: a list of processors and/or outputs to run in sequence.
     - `type`: what processor or output to run (eg. `processor.genericjson` or `output.logger`)
+    - `variables`: Additional variables to set before invoking this processor/output.
+    - `description`: A description that gets printed in the logs.
     - `config`: configuration of the processor or output
     - `runIf`: if this evaluates to empty, the processor/output is not run
     - `stopIf`: if this evalues to non-empty, the processing is stopped immediately (before the processor/output is run)
-    - `ignoreOn`: skips reprocessing of messages, see below:
+    - `ignoreOn`: (*deprecated*) skips reprocessing of messages, see below:
       - `bucket`: Cloud Storage bucket to store reprocessing markers (zero-length files), has to exist
       - `period`: textual presentation of the period after which a message can be reprocessed (eg. `2 days`)
       - `key`: the object reprocessing marker name (filename), if not set, it is the message and its properties hashed,
         otherwise you can specify a Jinja expression
     - `canFail`: if set to true, the task can fail but processing will still continue
     - `output`: the output variable for processors (some processors accept a single string, some a list of keys and values)
+  - `onError`: allows you to call one output if any of the pipeline tasks fail fatally
+  - `canFail`: any task in the pipeline can fail fatally, but the message will still be marked processed
   - `maximumMessageAge`: a textual representation of maximum age of a message that can be processed (set to `skip` to ignore)
+  - `globals`: a dictionary of variables that is evaluated before starting the pipeline, useful for things like localization, 
+    or other configuration parameters that get repeatedly used in the pipeline configuration
+  - `macros`: a list of Jinja macros to be made available in the pipeline (see [example](test/configs/macros.yaml))
+  - `ignoreOn`: skips reprocessing of messages, see below:
+    - `bucket`: Cloud Storage bucket to store reprocessing markers (zero-length files), has to exist
+    - `period`: textual presentation of the period after which a message can be reprocessed (eg. `2 days`)
+    - `key`: the object reprocessing marker name (filename), if not set, it is the message and its properties hashed,
+        otherwise you can specify a Jinja expression
+  - `concurrency`: skips processing of messages by limiting concurrent instances of the function, see below:
+    - `bucket`: Cloud Storage bucket to store zero-length concurrency lock file
+    - `period`: textual presentation of the period after which the lock is considered invalid (eg. `2 days`, leave unset if no period)
+    - `file`: the concurrency lock file name (defaults to `pubsub2inbox.lock`)
+    - `defer`: allow Pub/Sub to retry the message (defaults to `false`)
 
 For example of a modern pipeline, see [shell script example](examples/shellscript-config.yaml) or [test configs](test/configs/).
 
 ### Legacy configuration
 
-Input processors are configured under `processors` key and outputs under `outputs`.
-
-The retry mechanism acknowledges and discards any messages that are older than a 
-configured period (`retryPeriod` in configuration, default 2 days).
-
-The resend mechanism is to prevent recurring notifications from being send. It relies
-on a Cloud Storage bucket where is stores zero-length files, that are named by
-hashing the `resendKey` (if it is omitted, all template parameters are used). The
-resend period is configurable through `resendPeriod`. To prevent the resend bucket
-from accumulating unlimited files, set an [Object Lifecycle Management policy](https://cloud.google.com/storage/docs/lifecycle)
-on the bucket.
-
+For legacy configuration details, see [LEGACY](LEGACY.md).
 
 ## Deploying as Cloud Function
 
@@ -163,66 +197,14 @@ parameters in when using as a module:
   - `vpc_connector` (string, optional): ID of the serverless VPC Connector for the Cloud Function
   - `cloud_run` (boolean, optional): deploy via Cloud Run instead of Cloud Function. Defaults to `false`. If set to `true`, also specify `cloud_run_container`.
   - `cloud_run_container` (string, optional): container image to deploy on Cloud Run. See previous parameter.
-
+  - `cloud_functions_v2` (boolean, optional): deploy using Cloud Functions V2. Defaults to `false`. Recommended to set `true`.
+  - `use_local_files` (boolean, optional): use local files when deploying. Defaults to `true`.
+  - `local_files_path` (str, optional): sets the path where to fetch the function files.
+  - `log_level` (int, optional): set log level, defaults to `10` (debug).
+  
 ## Deploying manually
 
-First, we have the configuration in `config.yaml` and we're going to store the configuration for
-the function as a Cloud Secret Manager secret.
-
-Let's define some variables first:
-
-```sh
-export PROJECT_ID=your-project # Project ID where function will be deployed
-export REGION=europe-west1 # Where to deploy the functions
-export SECRET_ID=pubsub2inbox # Secret Manager secret name
-export SERVICE_ACCOUNT=pubsub2inbox # Service account name
-export SECRET_URL="projects/$PROJECT_ID/secrets/$SECRET_ID/versions/latest"
-export FUNCTION_NAME="pubsub2inbox"
-export PUBSUB_TOPIC="billing-alerts" # projects/$PROJECT_ID/topics/billing-alerts
-```
-
-Then we'll create the secrets in Secret Manager:
-
-```sh
-gcloud secrets create $SECRET_ID \
-    --replication-policy="automatic" \
-    --project $PROJECT_ID
-
-gcloud secrets versions add $SECRET_ID \
-    --data-file=config.yaml \
-    --project $PROJECT_ID
-```
-
-We will also create a service account for the Cloud Function:
-
-```sh
-gcloud iam service-accounts create $SA_NAME \
-    --project $PROJECT_ID
-
-gcloud secrets add-iam-policy-binding $SECRET_ID \
-    --member "serviceAccount:$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role "roles/secretmanager.secretAccessor" \
-    --project $PROJECT_ID
-
-gcloud iam service-accounts add-iam-policy-binding $SA_NAME@$PROJECT_ID.iam.gserviceaccount.com \
-    --member "serviceAccount:$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role "roles/iam.serviceAccountTokenCreator" \
-    --project $PROJECT_ID
-
-```
-
-Now we can deploy the Cloud Function:
-
-```sh
-gcloud functions deploy $FUNCTION_NAME \
-    --entry-point process_pubsub \
-    --runtime python38 \
-    --trigger-topic $PUBSUB_TOPIC \
-    --service-account "$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
-    --set-env-vars "CONFIG=$SECRET_URL" \
-    --region $REGION \
-    --project $PROJECT_ID
-```
+For manual deployment option, see [LEGACY](LEGACY.md).
 
 ## Deploying via Cloud Run
 
@@ -292,9 +274,19 @@ module "pubsub2inbox" {
   bucket_location    = local.region
   helper_bucket_name = local.helper_bucket ? module.helper-bucket.0.bucket.name : ""
 
+  cloud_functions_v2 = true
+
   # Add additional permissions for the service account here
   function_roles = []
 }
+```
+
+### Generating documentation
+
+Run the command:
+
+```
+# make docs
 ```
 
 ### Running tests
@@ -302,7 +294,7 @@ module "pubsub2inbox" {
 Run the command:
 
 ```
-# python3 -m unittest discover
+# make test
 ```
 
-To set against a real cloud project, set `PROJECT_ID` environment variable. 
+To test against a real cloud project, set `PROJECT_ID` environment variable. 

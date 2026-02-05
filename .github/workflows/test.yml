@@ -34,22 +34,23 @@ jobs:
         python-version: ["3.8", "3.9", "3.10"]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install --require-hashes --no-cache-dir --no-deps -r requirements.txt
           pip install --no-cache-dir --no-deps -r requirements-dev.txt
-          pip install yapf
 
       - name: Run lint check
         run: |
-          yapf --style google --diff --recursive .
+          make fmt
+          make lint
 
       - name: Run unit tests
         env:
@@ -58,6 +59,6 @@ jobs:
         run: |
           echo "Starting unit tests..."
 
-          python3 -m unittest discover -v
+          make test
 
           echo "Unit testing finished."

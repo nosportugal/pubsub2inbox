@@ -16,7 +16,8 @@ import os
 import email
 import base64
 from email import encoders
-import smtplib, ssl
+import smtplib
+import ssl
 import urllib
 from googleapiclient import discovery, errors
 from email.mime.base import MIMEBase
@@ -86,13 +87,18 @@ class MailOutput(Output):
                                             authority=authority)
         result = app.acquire_token_for_client(
             ['https://graph.microsoft.com/.default'])
-        if not 'access_token' in result:
+        if 'access_token' not in result:
             raise OAuthTokenFetchException(result.get('error_description'))
         return result['access_token']
 
     def expand_recipients(self, mail, config):
         """Expands group recipients using the Directory API"""
-        to_emails = email.utils.getaddresses([mail['mail_to']])
+        to_emails = []
+        try:
+            to_emails = email.utils.getaddresses([mail['mail_to']],
+                                                 strict=False)
+        except TypeError:
+            to_emails = email.utils.getaddresses([mail['mail_to']])
         self.logger.debug('Starting expansion of group recipients...',
                           extra={'to': to_emails})
 
@@ -145,7 +151,7 @@ class MailOutput(Output):
                     if u_response:
                         new_emails.append(e[1])
                 except errors.HttpError as exc:
-                    if not 'ignoreNonexistentGroups' in config or not config[
+                    if 'ignoreNonexistentGroups' not in config or not config[
                             'ignoreNonexistentGroups']:
                         raise GroupNotFoundException(
                             'Failed to find group %s in Cloud Identity!' % e[1])
@@ -182,7 +188,7 @@ class MailOutput(Output):
 
         server = None
         if 'verifyCertificate' in transport and transport[
-                'verifyCertificate'] == False:
+                'verifyCertificate'] is False:
             context = ssl._create_unverified_context()
         else:
             context = ssl.create_default_context()
@@ -242,7 +248,12 @@ class MailOutput(Output):
                     (file_name, len(content)))
                 message.attach(image)
 
-        parsed_recipients = email.utils.getaddresses([mail['mail_to']])
+        parsed_recipients = []
+        try:
+            parsed_recipients = email.utils.getaddresses([mail['mail_to']],
+                                                         strict=False)
+        except TypeError:
+            parsed_recipients = email.utils.getaddresses([mail['mail_to']])
         recipients = []
         for r in parsed_recipients:
             recipients.append(r[1])
@@ -442,17 +453,23 @@ class MailOutput(Output):
 
         if mail['html_body'] == '' and mail['text_body'] == '':
             raise NotConfiguredException(
-                'No HMTL or text email body configured for email output!')
+                'No HTML or text email body configured for email output!')
 
         for tpl in ['from', 'to', 'subject']:
-            mail_template = self.jinja_environment.from_string(
-                self.output_config[tpl])
-            mail['mail_%s' % tpl] = mail_template.render()
+            result = self._jinja_expand_string(self.output_config[tpl], tpl)
+            mail['mail_%s' % tpl] = result
 
         self.logger.debug('Canonicalizing email formats...')
         # Canonicalize the email formats
         for tpl in ['from', 'to']:
-            parsed_emails = email.utils.getaddresses([mail['mail_%s' % tpl]])
+            parsed_emails = []
+            try:
+                parsed_emails = email.utils.getaddresses(
+                    [mail['mail_%s' % tpl]], strict=False)
+            except TypeError:
+                parsed_emails = email.utils.getaddresses(
+                    [mail['mail_%s' % tpl]])
+
             if tpl == 'from' and len(parsed_emails) > 1:
                 raise MultipleSendersException(
                     'Multiple senders in from field!')
