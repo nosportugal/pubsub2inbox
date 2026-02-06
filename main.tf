@@ -470,22 +470,22 @@ resource "google_service_account" "invoker-service-account" {
 }
 
 # Allow the invoker service account to run the Cloud Run function
-resource "google_cloud_run_service_iam_member" "pubsub-invoker" {
+resource "google_cloud_run_v2_service_iam_member" "pubsub-invoker" {
   count   = var.cloud_run && (var.api == null || try(var.api.enabled, false) == false) ? 1 : 0
   project = var.project_id
 
-  location = google_cloud_run_service.function[0].location
-  service  = google_cloud_run_service.function[0].name
+  location = google_cloud_run_v2_service.function[0].location
+  name     = google_cloud_run_v2_service.function[0].name
   role     = "roles/run.invoker"
   member   = format("serviceAccount:%s", google_service_account.invoker-service-account[0].email)
 }
 
-resource "google_cloud_run_service_iam_member" "pubsub-api-invokers" {
+resource "google_cloud_run_v2_service_iam_member" "pubsub-api-invokers" {
   for_each = toset(var.api != null && try(var.api.enabled, false) == true ? var.api.iam_invokers : [])
   project  = var.project_id
 
-  location = google_cloud_run_service.function[0].location
-  service  = google_cloud_run_service.function[0].name
+  location = google_cloud_run_v2_service.function[0].location
+  name     = google_cloud_run_v2_service.function[0].name
   role     = "roles/run.invoker"
   member   = each.value
 }
@@ -507,7 +507,7 @@ resource "google_pubsub_subscription" "pubsub-subscription" {
   name  = format("%s-subscription", var.function_name)
   topic = var.pubsub_topic
   push_config {
-    push_endpoint = google_cloud_run_service.function[0].status[0].url
+    push_endpoint = google_cloud_run_v2_service.function[0].uri
     oidc_token {
       service_account_email = google_service_account.invoker-service-account[0].email
     }
@@ -521,70 +521,92 @@ resource "google_pubsub_subscription" "pubsub-subscription" {
   }
   depends_on = [
     google_service_account_iam_member.pubsub-token-creator[0],
-    google_cloud_run_service_iam_member.pubsub-invoker[0]
+    google_cloud_run_v2_service_iam_member.pubsub-invoker[0]
   ]
 }
 
-resource "google_cloud_run_service" "function" {
+resource "google_cloud_run_v2_service" "function" {
   count   = var.cloud_run ? 1 : 0
   project = var.project_id
 
   name     = var.function_name
   location = var.region
+  ingress  = var.ingress_settings
 
   template {
-    spec {
-      containers {
-        image = var.cloud_run_container
+    containers {
+      image = var.cloud_run_container
 
-        env {
-          name  = "CONFIG"
-          value = google_secret_manager_secret_version.config-secret-version.name
-        }
-        env {
-          name  = "LOG_LEVEL"
-          value = var.log_level
-        }
-        env {
-          name  = "SERVICE_ACCOUNT"
-          value = var.create_service_account ? google_service_account.service-account[0].email : var.service_account
-        }
-        dynamic "env" {
-          for_each = var.api != null && try(var.api.enabled, false) == true ? [""] : []
-          content {
-            name  = "WEBSERVER"
-            value = "1"
-          }
-        }
-        resources {
-          limits = {
-            memory = format("%dMi", var.available_memory_mb)
-            cpu    = var.available_cpu != null ? var.available_cpu : 1
-          }
+      env {
+        name  = "CONFIG"
+        value = google_secret_manager_secret_version.config-secret-version.name
+      }
+      env {
+        name  = "LOG_LEVEL"
+        value = tostring(var.log_level)
+      }
+      env {
+        name  = "SERVICE_ACCOUNT"
+        value = var.create_service_account ? google_service_account.service-account[0].email : var.service_account
+      }
+      dynamic "env" {
+        for_each = var.api != null && try(var.api.enabled, false) == true ? [""] : []
+        content {
+          name  = "WEBSERVER"
+          value = "1"
         }
       }
-      service_account_name  = var.create_service_account ? google_service_account.service-account[0].email : var.service_account
-      container_concurrency = var.container_concurrency
-      timeout_seconds       = var.function_timeout
+      resources {
+        limits = {
+          memory = format("%dMi", var.available_memory_mb)
+          cpu    = tostring(var.available_cpu != null ? var.available_cpu : 1)
+        }
+      }
     }
-    metadata {
-      annotations = merge({
-        "autoscaling.knative.dev/minScale" = var.instance_limits.min_instances
-        "autoscaling.knative.dev/maxScale" = var.instance_limits.max_instances
-        }, var.cloudsql_connection != null ? {
-        "run.googleapis.com/cloudsql-instances" = var.cloudsql_connection
-        } : {}, var.vpc_connector != null ? {
-        "run.googleapis.com/vpc-access-connector" = var.vpc_connector
-        } : {}, var.vpc_egress != null ? {
-        "run.googleapis.com/vpc-access-egress"  = var.vpc_egress.egress,
-        "run.googleapis.com/network-interfaces" = jsonencode([{ network = var.vpc_egress.network, subnetwork = var.vpc_egress.subnetwork, tags = var.vpc_egress.tags }])
-        } : {}
-      )
+
+    service_account                  = var.create_service_account ? google_service_account.service-account[0].email : var.service_account
+    max_instance_request_concurrency = var.container_concurrency
+    timeout                          = format("%ds", var.function_timeout)
+
+    scaling {
+      min_instance_count = var.instance_limits.min_instances
+      max_instance_count = var.instance_limits.max_instances
+    }
+
+    dynamic "volumes" {
+      for_each = var.cloudsql_connection != null ? [var.cloudsql_connection] : []
+      content {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [volumes.value]
+        }
+      }
+    }
+
+    dynamic "vpc_access" {
+      for_each = var.vpc_connector != null ? [var.vpc_connector] : []
+      content {
+        connector = vpc_access.value
+        egress    = "ALL_TRAFFIC"
+      }
+    }
+
+    dynamic "vpc_access" {
+      for_each = var.vpc_egress != null && var.vpc_connector == null ? [var.vpc_egress] : []
+      content {
+        egress = upper(replace(vpc_access.value.egress, "-", "_"))
+        network_interfaces {
+          network    = vpc_access.value.network
+          subnetwork = vpc_access.value.subnetwork
+          tags       = vpc_access.value.tags
+        }
+      }
     }
   }
+
   traffic {
-    percent         = 100
-    latest_revision = true
+    percent = 100
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
   }
 }
 

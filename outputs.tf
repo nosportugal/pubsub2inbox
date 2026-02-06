@@ -53,10 +53,10 @@ output "run_service" {
   value = (var.cloud_run || var.cloud_functions_v2 ?
     (var.cloud_run ? {
       project  = var.project_id
-      location = google_cloud_run_service.function[0].location
-      service  = google_cloud_run_service.function[0].name
-      name     = google_cloud_run_service.function[0].name
-      url      = google_cloud_run_service.function[0].status[0].url
+      location = google_cloud_run_v2_service.function[0].location
+      service  = google_cloud_run_v2_service.function[0].name
+      name     = google_cloud_run_v2_service.function[0].name
+      url      = google_cloud_run_v2_service.function[0].uri
       } : {
       project  = var.project_id
       location = google_cloudfunctions2_function.function[0].location
