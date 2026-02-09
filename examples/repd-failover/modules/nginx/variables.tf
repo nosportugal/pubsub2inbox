@@ -84,6 +84,6 @@ variable "users" {
 
 variable "additional_mounts" {
   description = "Additional mounts"
-  type = map(string)
-  default = {}
+  type        = map(string)
+  default     = {}
 }

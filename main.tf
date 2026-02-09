@@ -529,9 +529,10 @@ resource "google_cloud_run_v2_service" "function" {
   count   = var.cloud_run ? 1 : 0
   project = var.project_id
 
-  name     = var.function_name
-  location = var.region
-  ingress  = var.ingress_settings
+  name                = var.function_name
+  location            = var.region
+  ingress             = var.ingress_settings
+  deletion_protection = false
 
   template {
     containers {

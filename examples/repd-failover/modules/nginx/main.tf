@@ -28,8 +28,8 @@ locals {
     nginx_config = (var.nginx_config == null ? null : templatefile(
       var.nginx_config, var.config_variables
     ))
-    runcmd_pre  = var.runcmd_pre
-    runcmd_post = var.runcmd_post
+    runcmd_pre        = var.runcmd_pre
+    runcmd_post       = var.runcmd_post
     additional_mounts = var.additional_mounts
   }))
   files = {

@@ -65,7 +65,7 @@ variable "tls_verify" {
 }
 
 variable "ingress_settings" {
-  type        = string
+  type = string
   # See
   #   - https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/cloudfunctions2_function#ingress_settings
   #   - https://cloud.google.com/functions/docs/networking/network-settings#ingress_settings
